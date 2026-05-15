@@ -286,34 +286,42 @@ class App:
 
     def _build_ui(self):
         bg = '#F0F4F8'
-        accent = '#2E75B6'
+        btn_bg   = '#1A5CA8'   # тёмно-синий фон кнопок
+        btn_fg   = '#FFFFFF'   # белый текст
+        btn_active = '#0D3E7A' # ещё темнее при наведении
+        run_bg   = '#0D3E7A'
+        run_active = '#092D5C'
 
         # Title
         tk.Label(self.root, text="Generator raportów faktur", font=('Helvetica', 14, 'bold'),
-                 bg=bg, fg=accent).pack(pady=(18, 4))
+                 bg=bg, fg='#1A5CA8').pack(pady=(18, 4))
         tk.Label(self.root, text="Załaduj dwa pliki — otrzymasz gotowy raport Excel",
-                 font=('Helvetica', 9), bg=bg, fg='#555').pack(pady=(0, 16))
+                 font=('Helvetica', 9), bg=bg, fg='#444').pack(pady=(0, 16))
 
         frame = tk.Frame(self.root, bg=bg)
         frame.pack(padx=30, fill='x')
 
         # CSV row
         tk.Label(frame, text="1.  Lista faktur (.csv):", font=('Helvetica', 10, 'bold'),
-                 bg=bg, anchor='w').grid(row=0, column=0, sticky='w', pady=4)
+                 bg=bg, fg='#222', anchor='w').grid(row=0, column=0, sticky='w', pady=4)
         tk.Entry(frame, textvariable=self.csv_path, width=36,
-                 font=('Helvetica', 9)).grid(row=1, column=0, sticky='ew', pady=(0, 4))
+                 font=('Helvetica', 9), bg='#FFFFFF', fg='#111',
+                 relief='solid', bd=1).grid(row=1, column=0, sticky='ew', pady=(0, 4))
         tk.Button(frame, text="Wybierz plik", command=self._pick_csv,
-                  bg=accent, fg='white', relief='flat', padx=8, pady=3,
-                  font=('Helvetica', 9)).grid(row=1, column=1, padx=(8, 0))
+                  bg=btn_bg, fg=btn_fg, activebackground=btn_active, activeforeground=btn_fg,
+                  relief='raised', bd=2, padx=10, pady=4,
+                  font=('Helvetica', 9, 'bold'), cursor='hand2').grid(row=1, column=1, padx=(8, 0))
 
         # XLSX row
         tk.Label(frame, text="2.  Lista klientów z księgowymi (.xlsx):", font=('Helvetica', 10, 'bold'),
-                 bg=bg, anchor='w').grid(row=2, column=0, sticky='w', pady=(12, 4))
+                 bg=bg, fg='#222', anchor='w').grid(row=2, column=0, sticky='w', pady=(12, 4))
         tk.Entry(frame, textvariable=self.xlsx_path, width=36,
-                 font=('Helvetica', 9)).grid(row=3, column=0, sticky='ew', pady=(0, 4))
+                 font=('Helvetica', 9), bg='#FFFFFF', fg='#111',
+                 relief='solid', bd=1).grid(row=3, column=0, sticky='ew', pady=(0, 4))
         tk.Button(frame, text="Wybierz plik", command=self._pick_xlsx,
-                  bg=accent, fg='white', relief='flat', padx=8, pady=3,
-                  font=('Helvetica', 9)).grid(row=3, column=1, padx=(8, 0))
+                  bg=btn_bg, fg=btn_fg, activebackground=btn_active, activeforeground=btn_fg,
+                  relief='raised', bd=2, padx=10, pady=4,
+                  font=('Helvetica', 9, 'bold'), cursor='hand2').grid(row=3, column=1, padx=(8, 0))
 
         frame.columnconfigure(0, weight=1)
 
@@ -323,13 +331,14 @@ class App:
         # Status label
         self.status_var = tk.StringVar(value='')
         tk.Label(self.root, textvariable=self.status_var, font=('Helvetica', 9),
-                 bg=bg, fg='#555').pack(pady=(10, 0))
+                 bg=bg, fg='#333').pack(pady=(10, 0))
 
         # Generate button
         tk.Button(self.root, text="▶  Generuj raport",
                   command=self._run,
-                  bg='#1F497D', fg='white', font=('Helvetica', 11, 'bold'),
-                  relief='flat', padx=20, pady=8).pack(pady=(10, 0))
+                  bg=run_bg, fg=btn_fg, activebackground=run_active, activeforeground=btn_fg,
+                  font=('Helvetica', 11, 'bold'), relief='raised', bd=3,
+                  padx=24, pady=10, cursor='hand2').pack(pady=(12, 0))
 
     def _pick_csv(self):
         path = filedialog.askopenfilename(
