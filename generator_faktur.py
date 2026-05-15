@@ -284,6 +284,15 @@ def build_excel(df, path):
                 cell.alignment = Alignment(vertical='center', wrap_text=(col == 2))
 
     wb.save(path)
+
+    # macOS: remove quarantine flag so Excel can open the file
+    try:
+        import subprocess
+        subprocess.run(['xattr', '-d', 'com.apple.quarantine', path],
+                       capture_output=True)
+    except Exception:
+        pass
+
     return len(matched), len(not_found), buchhalters
 
 
