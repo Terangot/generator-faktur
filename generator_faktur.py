@@ -12,6 +12,7 @@ from rapidfuzz import fuzz
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 # ─────────────────────────────────────────
@@ -121,6 +122,8 @@ def write_invoice_rows(ws, grp, start_row):
         netto_str = str(row_data.get('Kwota netto', ''))
         curr_match = re.search(r'[A-Z]{3}', netto_str)
         currency = curr_match.group() if curr_match else 'PLN'
+        netto_val  = parse_amount(netto_str)
+        brutto_val = parse_amount(str(row_data.get('Kwota brutto', '')))
         vals = [
             row_data.get('Lp', ''),
             row_data.get('Klient', ''),
@@ -128,8 +131,8 @@ def write_invoice_rows(ws, grp, start_row):
             row_data.get('Numer', ''),
             row_data.get('Data wystawienia', ''),
             row_data.get('Termin płatności', ''),
-            re.sub(r'[A-Z]{3}', '', netto_str).strip(),
-            re.sub(r'[A-Z]{3}', '', str(row_data.get('Kwota brutto', ''))).strip(),
+            netto_val,
+            brutto_val,
             currency,
             row_data.get('Zapłacona', ''),
             row_data.get('Zatwierdzona', ''),
@@ -138,12 +141,15 @@ def write_invoice_rows(ws, grp, start_row):
         ]
         ws.row_dimensions[r].height = 16
         for col, val in enumerate(vals, 1):
-            c = ws.cell(row=r, column=col, value=str(val) if val is not None else '')
+            c = ws.cell(row=r, column=col, value=val)
             if i % 2 == 1:
                 c.fill = alt_fill
             c.alignment = Alignment(vertical='center', wrap_text=(col == 2))
             c.border = BORDER
-            if col in (1, 9, 10, 11, 12):
+            if col in (7, 8):
+                c.number_format = '#,##0.00'
+                c.alignment = Alignment(horizontal='right', vertical='center')
+            elif col in (1, 9, 10, 11, 12):
                 c.alignment = Alignment(horizontal='center', vertical='center')
 
 
@@ -153,132 +159,152 @@ def generate_excel(df_inv, output_path):
 
     matched_df  = df_inv[df_inv['Buchhalter'] != ''].copy()
     not_found_df = df_inv[df_inv['Buchhalter'] == ''].copy()
-    accountants = sorted(matched_df['Buchhalter'].unique())
-    ncols = len(INV_HEADERS)
+    accountants  = sorted(matched_df['Buchhalter'].unique())
+    ncols        = len(INV_HEADERS)
+    last_col_letter = get_column_letter(ncols)
 
-    # ── PODSUMOWANIE ──
-    ws_sum = wb.create_sheet("PODSUMOWANIE")
-    ws_sum.sheet_view.showGridLines = False
-    ws_sum.merge_cells('A1:F1')
-    c = ws_sum['A1']
-    c.value = 'PODSUMOWANIE — Faktury według księgowych'
-    c.font = Font(bold=True, size=14, color='FFFFFF')
-    c.fill = PatternFill("solid", fgColor='1F3864')
-    c.alignment = Alignment(horizontal='center', vertical='center')
-    ws_sum.row_dimensions[1].height = 28
-    write_header_row(ws_sum, 2,
-        ['Księgowy', 'Liczba faktur', 'Kwota netto (PLN)', 'Kwota brutto (PLN)',
-         'Kwota netto (EUR)', 'Kwota brutto (EUR)'], '2E4057', height=22)
+    # словарь: бухгалтер → строка RAZEM на его листе (для формул PODSUMOWANIE)
+    razem_refs = {}
 
-    row = 3
+    # ── Листы по бухгалтерам (сначала, чтобы PODSUMOWANIE мог ссылаться) ──
     for buch in accountants:
-        grp = matched_df[matched_df['Buchhalter'] == buch]
-        pln = grp[grp['Kwota netto'].str.contains('PLN', na=False)]
-        eur = grp[grp['Kwota netto'].str.contains('EUR', na=False)]
-        clr = ACCOUNTANT_COLORS.get(buch, DEFAULT_COLOR)
-        fill = PatternFill("solid", fgColor=clr['subheader'])
-        vals = [buch, len(grp),
-                f"{sum(parse_amount(v) for v in pln['Kwota netto']):,.2f}" if len(pln) else '-',
-                f"{sum(parse_amount(v) for v in pln['Kwota brutto']):,.2f}" if len(pln) else '-',
-                f"{sum(parse_amount(v) for v in eur['Kwota netto']):,.2f}" if len(eur) else '-',
-                f"{sum(parse_amount(v) for v in eur['Kwota brutto']):,.2f}" if len(eur) else '-']
-        for col, val in enumerate(vals, 1):
-            c = ws_sum.cell(row=row, column=col, value=val)
-            c.font = Font(bold=(col == 1), color='FFFFFF', size=10)
-            c.fill = fill
-            c.alignment = Alignment(horizontal='center', vertical='center')
-            c.border = BORDER
-        ws_sum.row_dimensions[row].height = 18
-        row += 1
-
-    for col, val in enumerate(['NIE ZNALEZIONO', len(not_found_df), '-', '-', '-', '-'], 1):
-        c = ws_sum.cell(row=row, column=col, value=val)
-        c.font = Font(bold=True, color='FFFFFF', size=10)
-        c.fill = PatternFill("solid", fgColor='C00000')
-        c.alignment = Alignment(horizontal='center', vertical='center')
-        c.border = BORDER
-    ws_sum.row_dimensions[row].height = 18
-    set_col_widths(ws_sum, [28, 16, 20, 20, 18, 18])
-
-    # ── Листы по бухгалтерам ──
-    for buch in accountants:
-        grp = matched_df[matched_df['Buchhalter'] == buch].copy()
-        clr = ACCOUNTANT_COLORS.get(buch, DEFAULT_COLOR)
-        ws = wb.create_sheet(buch[:31])
+        grp  = matched_df[matched_df['Buchhalter'] == buch].copy()
+        clr  = ACCOUNTANT_COLORS.get(buch, DEFAULT_COLOR)
+        safe = re.sub(r'[^\w]', '_', buch)[:28]   # имя таблицы без спецсимволов
+        ws   = wb.create_sheet(buch[:31])
         ws.sheet_view.showGridLines = False
 
-        pln = grp[grp['Kwota netto'].str.contains('PLN', na=False)]
-        eur = grp[grp['Kwota netto'].str.contains('EUR', na=False)]
-        netto_pln  = sum(parse_amount(v) for v in pln['Kwota netto'])
-        brutto_pln = sum(parse_amount(v) for v in pln['Kwota brutto'])
-        netto_eur  = sum(parse_amount(v) for v in eur['Kwota netto'])
-        brutto_eur = sum(parse_amount(v) for v in eur['Kwota brutto'])
-        summary = f"PLN: netto {netto_pln:,.2f} / brutto {brutto_pln:,.2f}"
-        if netto_eur:
-            summary += f"   |   EUR: netto {netto_eur:,.2f} / brutto {brutto_eur:,.2f}"
-
-        ws.merge_cells(f'A1:{get_column_letter(ncols)}1')
+        # ── Заголовок-баннер (строка 1) ──
+        ws.merge_cells(f'A1:{last_col_letter}1')
         c = ws['A1']
-        c.value = f"Księgowy: {buch}   |   Liczba faktur: {len(grp)}   |   {summary}"
-        c.font = Font(bold=True, size=12, color='FFFFFF')
-        c.fill = PatternFill("solid", fgColor=clr['header'])
+        c.value = f"Księgowy: {buch}   |   Liczba faktur: {len(grp)}   |   ⬇ Filtruj kolumny aby zmienić sumy"
+        c.font  = Font(bold=True, size=12, color='FFFFFF')
+        c.fill  = PatternFill("solid", fgColor=clr['header'])
         c.alignment = Alignment(horizontal='center', vertical='center')
         ws.row_dimensions[1].height = 26
 
+        # ── Заголовки (строка 2) ──
         write_header_row(ws, 2, INV_HEADERS, clr['subheader'], height=22)
         set_col_widths(ws, COL_WIDTHS)
-        write_invoice_rows(ws, grp, 3)
 
-        total_row = 3 + len(grp)
-        ws.row_dimensions[total_row].height = 18
+        # ── Данные (строки 3…) ──
+        write_invoice_rows(ws, grp, 3)
+        last_data_row = 2 + len(grp)   # последняя строка данных включая заголовок
+
+        # ── Excel Table с автофильтром ──
+        tbl_ref  = f"A2:{last_col_letter}{last_data_row}"
+        tbl_name = f"Tbl_{safe}"
+        tbl = Table(displayName=tbl_name, ref=tbl_ref)
+        tbl.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2",
+            showFirstColumn=False, showLastColumn=False,
+            showRowStripes=True,  showColumnStripes=False)
+        ws.add_table(tbl)
+
+        # ── Строка RAZEM с SUBTOTAL (пересчитывается по фильтру) ──
+        total_row = last_data_row + 1
+        razem_refs[buch] = (ws.title, total_row)
+        ws.row_dimensions[total_row].height = 20
         total_fill = PatternFill("solid", fgColor=clr['subheader'])
+
+        data_start = 3
+        data_end   = last_data_row
+
         for col in range(1, ncols + 1):
             c = ws.cell(row=total_row, column=col)
-            c.fill = total_fill
-            c.font = Font(bold=True, color='FFFFFF')
+            c.fill  = total_fill
+            c.font  = Font(bold=True, color='FFFFFF', size=11)
             c.border = BORDER
             c.alignment = Alignment(horizontal='center', vertical='center')
-        ws.cell(row=total_row, column=1, value='RAZEM')
-        ws.cell(row=total_row, column=7, value=f"{netto_pln:,.2f}" if netto_pln else (f"{netto_eur:,.2f}" if netto_eur else ''))
-        ws.cell(row=total_row, column=8, value=f"{brutto_pln:,.2f}" if brutto_pln else (f"{brutto_eur:,.2f}" if brutto_eur else ''))
 
-    # ── NIE ZNALEZIONO ──
+        # RAZEM label
+        ws.cell(row=total_row, column=1, value='RAZEM (widoczne)')
+
+        # SUBTOTAL(9,...) = SUM видимых строк; col G=7 netto, H=8 brutto
+        col_g = get_column_letter(7)
+        col_h = get_column_letter(8)
+        col_a = get_column_letter(1)
+
+        c7 = ws.cell(row=total_row, column=7)
+        c7.value  = f"=SUBTOTAL(9,{col_g}{data_start}:{col_g}{data_end})"
+        c7.number_format = '#,##0.00'
+        c7.alignment = Alignment(horizontal='right', vertical='center')
+
+        c8 = ws.cell(row=total_row, column=8)
+        c8.value  = f"=SUBTOTAL(9,{col_h}{data_start}:{col_h}{data_end})"
+        c8.number_format = '#,##0.00'
+        c8.alignment = Alignment(horizontal='right', vertical='center')
+
+        # SUBTOTAL(103,...) = COUNT видимых строк
+        c_cnt = ws.cell(row=total_row, column=2)
+        c_cnt.value = f"=SUBTOTAL(103,{col_a}{data_start}:{col_a}{data_end})"
+        c_cnt.alignment = Alignment(horizontal='center', vertical='center')
+
+    # ── PODSUMOWANIE (ссылается на RAZEM каждого листа) ──
+    ws_sum = wb.create_sheet("PODSUMOWANIE", 0)
+    ws_sum.sheet_view.showGridLines = False
+
+    ws_sum.merge_cells('A1:F1')
+    c = ws_sum['A1']
+    c.value = 'PODSUMOWANIE — aktualizuje się automatycznie po filtrach'
+    c.font  = Font(bold=True, size=13, color='FFFFFF')
+    c.fill  = PatternFill("solid", fgColor='1F3864')
+    c.alignment = Alignment(horizontal='center', vertical='center')
+    ws_sum.row_dimensions[1].height = 28
+
+    write_header_row(ws_sum, 2,
+        ['Księgowy', 'Widocznych faktur', 'Kwota netto', 'Kwota brutto', 'Arkusz', ''],
+        '2E4057', height=22)
+
+    sum_row = 3
+    for buch in accountants:
+        clr = ACCOUNTANT_COLORS.get(buch, DEFAULT_COLOR)
+        fill = PatternFill("solid", fgColor=clr['subheader'])
+        sheet_title, tr = razem_refs[buch]
+        safe_title = f"'{sheet_title}'" if ' ' in sheet_title else sheet_title
+
+        cells = [
+            (1, buch,   None),
+            (2, f"={safe_title}!B{tr}", '#,##0'),
+            (3, f"={safe_title}!G{tr}", '#,##0.00'),
+            (4, f"={safe_title}!H{tr}", '#,##0.00'),
+            (5, f'=HYPERLINK("#\'{sheet_title}\'!A1","→ перейти")', None),
+        ]
+        for col, val, fmt in cells:
+            c = ws_sum.cell(row=sum_row, column=col, value=val)
+            c.font  = Font(bold=(col == 1), color='FFFFFF', size=10)
+            c.fill  = fill
+            c.border = BORDER
+            c.alignment = Alignment(horizontal='center', vertical='center')
+            if fmt:
+                c.number_format = fmt
+        ws_sum.row_dimensions[sum_row].height = 18
+        sum_row += 1
+
+    # NIE ZNALEZIONO строка
+    for col, val in enumerate(['NIE ZNALEZIONO', len(not_found_df), '-', '-', '-', ''], 1):
+        c = ws_sum.cell(row=sum_row, column=col, value=val)
+        c.font  = Font(bold=True, color='FFFFFF', size=10)
+        c.fill  = PatternFill("solid", fgColor='C00000')
+        c.border = BORDER
+        c.alignment = Alignment(horizontal='center', vertical='center')
+    ws_sum.row_dimensions[sum_row].height = 18
+
+    set_col_widths(ws_sum, [28, 18, 18, 18, 14, 8])
+
+    # ── NIE ZNALEZIONO лист ──
     ws_nf = wb.create_sheet("NIE ZNALEZIONO")
     ws_nf.sheet_view.showGridLines = False
-    ws_nf.merge_cells(f'A1:{get_column_letter(ncols)}1')
+    ws_nf.merge_cells(f'A1:{last_col_letter}1')
     c = ws_nf['A1']
     c.value = f"Faktury bez przypisanego księgowego — {len(not_found_df)} pozycji"
-    c.font = Font(bold=True, size=12, color='FFFFFF')
-    c.fill = PatternFill("solid", fgColor='7B0000')
+    c.font  = Font(bold=True, size=12, color='FFFFFF')
+    c.fill  = PatternFill("solid", fgColor='7B0000')
     c.alignment = Alignment(horizontal='center', vertical='center')
     ws_nf.row_dimensions[1].height = 26
     write_header_row(ws_nf, 2, INV_HEADERS, 'C00000', height=22)
     set_col_widths(ws_nf, COL_WIDTHS)
-
-    alt_fill = PatternFill("solid", fgColor="FFF0F0")
-    for i, (_, row_data) in enumerate(not_found_df.iterrows()):
-        r = 3 + i
-        netto_str = str(row_data.get('Kwota netto', ''))
-        curr_match = re.search(r'[A-Z]{3}', netto_str)
-        currency = curr_match.group() if curr_match else 'PLN'
-        vals = [
-            row_data.get('Lp', ''), row_data.get('Klient', ''), str(row_data.get('NIP', '')),
-            row_data.get('Numer', ''), row_data.get('Data wystawienia', ''),
-            row_data.get('Termin płatności', ''),
-            re.sub(r'[A-Z]{3}', '', netto_str).strip(),
-            re.sub(r'[A-Z]{3}', '', str(row_data.get('Kwota brutto', ''))).strip(),
-            currency, row_data.get('Zapłacona', ''), row_data.get('Zatwierdzona', ''),
-            row_data.get('KSeF', ''), '',
-        ]
-        ws_nf.row_dimensions[r].height = 16
-        for col, val in enumerate(vals, 1):
-            c = ws_nf.cell(row=r, column=col, value=str(val) if val is not None else '')
-            if i % 2 == 1:
-                c.fill = alt_fill
-            c.alignment = Alignment(vertical='center', wrap_text=(col == 2))
-            c.border = BORDER
-            if col in (1, 9, 10, 11, 12):
-                c.alignment = Alignment(horizontal='center', vertical='center')
+    write_invoice_rows(ws_nf, not_found_df, 3)
 
     wb.save(output_path)
     return len(matched_df), len(not_found_df), accountants
