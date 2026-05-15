@@ -15,6 +15,23 @@ from openpyxl.utils import get_column_letter
 
 
 # ─────────────────────────────────────────
+#  FILE READER — auto-detect format
+# ─────────────────────────────────────────
+
+def read_file(path, **kwargs):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ('.xlsx', '.xls'):
+        return pd.read_excel(path, **kwargs)
+    # CSV — пробуем cp1250, потом utf-8
+    for enc in ('cp1250', 'utf-8', 'utf-8-sig'):
+        try:
+            return pd.read_csv(path, sep=';', encoding=enc, **kwargs)
+        except (UnicodeDecodeError, ValueError):
+            continue
+    raise ValueError(f"Не удалось прочитать файл: {path}")
+
+
+# ─────────────────────────────────────────
 #  MATCHING
 # ─────────────────────────────────────────
 
@@ -301,8 +318,8 @@ class App:
         frame = tk.Frame(self.root, bg=bg)
         frame.pack(padx=30, fill='x')
 
-        # CSV row
-        tk.Label(frame, text="1.  Lista faktur (.csv):", font=('Helvetica', 10, 'bold'),
+        # File 1 row
+        tk.Label(frame, text="1.  Lista faktur (.csv / .xlsx):", font=('Helvetica', 10, 'bold'),
                  bg=bg, fg='#222', anchor='w').grid(row=0, column=0, sticky='w', pady=4)
         tk.Entry(frame, textvariable=self.csv_path, width=36,
                  font=('Helvetica', 9), bg='#FFFFFF', fg='#111',
@@ -312,8 +329,8 @@ class App:
                   relief='raised', bd=2, padx=10, pady=4,
                   font=('Helvetica', 9, 'bold'), cursor='hand2').grid(row=1, column=1, padx=(8, 0))
 
-        # XLSX row
-        tk.Label(frame, text="2.  Lista klientów z księgowymi (.xlsx):", font=('Helvetica', 10, 'bold'),
+        # File 2 row
+        tk.Label(frame, text="2.  Lista klientów z księgowymi (.csv / .xlsx):", font=('Helvetica', 10, 'bold'),
                  bg=bg, fg='#222', anchor='w').grid(row=2, column=0, sticky='w', pady=(12, 4))
         tk.Entry(frame, textvariable=self.xlsx_path, width=36,
                  font=('Helvetica', 9), bg='#FFFFFF', fg='#111',
@@ -342,15 +359,21 @@ class App:
 
     def _pick_csv(self):
         path = filedialog.askopenfilename(
-            title="Wybierz plik CSV z fakturami",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+            title="Wybierz plik z fakturami",
+            filetypes=[("Wszystkie obsługiwane", "*.csv *.xlsx *.xls"),
+                       ("CSV files", "*.csv"),
+                       ("Excel files", "*.xlsx *.xls"),
+                       ("All files", "*.*")])
         if path:
             self.csv_path.set(path)
 
     def _pick_xlsx(self):
         path = filedialog.askopenfilename(
-            title="Wybierz plik Excel z klientami",
-            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")])
+            title="Wybierz plik z klientami",
+            filetypes=[("Wszystkie obsługiwane", "*.csv *.xlsx *.xls"),
+                       ("CSV files", "*.csv"),
+                       ("Excel files", "*.xlsx *.xls"),
+                       ("All files", "*.*")])
         if path:
             self.xlsx_path.set(path)
 
@@ -359,10 +382,10 @@ class App:
         xlsx_path = self.xlsx_path.get().strip()
 
         if not csv_path or not os.path.exists(csv_path):
-            messagebox.showerror("Błąd", "Wskaż plik CSV z fakturami!")
+            messagebox.showerror("Błąd", "Wskaż plik z fakturami!")
             return
         if not xlsx_path or not os.path.exists(xlsx_path):
-            messagebox.showerror("Błąd", "Wskaż plik Excel z klientami!")
+            messagebox.showerror("Błąd", "Wskaż plik z klientami!")
             return
 
         self.status_var.set("Przetwarzanie...")
@@ -371,14 +394,14 @@ class App:
         self.root.update()
 
         try:
-            # Load CSV
-            df_inv = pd.read_csv(csv_path, sep=';', encoding='cp1250')
+            # Load invoices — auto-detect format
+            df_inv = read_file(csv_path)
             df_inv = df_inv.drop(columns=[c for c in df_inv.columns if 'Unnamed' in c], errors='ignore')
             df_inv['NIP']    = df_inv['Kontrahent'].apply(extract_nip)
             df_inv['Klient'] = df_inv['Kontrahent'].apply(extract_name)
 
-            # Load Excel
-            df_xl = pd.read_excel(xlsx_path, header=None)
+            # Load clients — auto-detect format
+            df_xl = read_file(xlsx_path, header=None)
             df_xl.columns = ['Klient', 'Buchhalter', 'Pomochnik']
             df_xl = df_xl[df_xl['Klient'].notna()]
             df_xl = df_xl[~df_xl['Klient'].astype(str).str.contains('бухг', na=False)]
